@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Personal Data Dashboard</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+<style>
+  :root {
+    --accent: #6f5cf0;
+    --accent-2: #3ddcff;
+  }
+  body {
+    background: #f4f5f9;
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    padding-bottom: 40px;
+  }
+  .hero {
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    color: #fff;
+    padding: 28px 16px 20px;
+    border-radius: 0 0 24px 24px;
+    margin-bottom: 18px;
+  }
+  .hero h1 { font-size: 1.4rem; font-weight: 700; margin: 0; }
+  .hero p { margin: 4px 0 0; opacity: .9; font-size: .85rem; }
+  .container { max-width: 720px; }
+  .nav-pills .nav-link {
+    font-weight: 600;
+    font-size: .85rem;
+    color: #444;
+  }
+  .nav-pills .nav-link.active {
+    background: var(--accent);
+  }
+  .panel-card {
+    background: #fff;
+    border-radius: 16px;
+    box-shadow: 0 2px 12px rgba(0,0,0,.06);
+    padding: 16px;
+  }
+  .toolbar {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+  .file-label {
+    flex: 1 1 160px;
+  }
+  .search-input { flex: 1 1 160px; }
+  .count-badge { font-size: .75rem; }
+  .table-wrap {
+    max-height: 55vh;
+    overflow: auto;
+    border-radius: 10px;
+    border: 1px solid #eee;
+  }
+  table { font-size: .8rem; margin-bottom: 0; }
+  thead th {
+    position: sticky;
+    top: 0;
+    background: #f8f8fb;
+    z-index: 1;
+    white-space: nowrap;
+  }
+  td { max-width: 260px; overflow-wrap: anywhere; }
+  .empty-state {
+    text-align: center;
+    padding: 40px 12px;
+    color: #999;
+  }
+  .empty-state i { font-size: 2rem; display: block; margin-bottom: 8px; }
+  .privacy-note {
+    font-size: .75rem;
+    color: #888;
+    text-align: center;
+    margin-top: 18px;
+  }
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <div class="container">
+    <h1><i class="bi bi-shield-lock"></i> Personal Data Dashboard</h1>
+    <p>history.csv, sms.csv and calls.csv are loaded automatically from this folder. Everything stays on this device.</p>
+  </div>
+</div>
+
+<div class="container">
+  <div id="protocolWarning" class="alert alert-warning d-none" role="alert">
+    <i class="bi bi-exclamation-triangle"></i>
+    This page was opened as a local file, so Chrome blocks it from reading the CSV files.
+    Run a tiny local server in this folder (e.g. <code>python -m http.server</code>) and open
+    <code>http://localhost:8000</code> instead — then auto-load will work.
+  </div>
+
+  <ul class="nav nav-pills mb-3" id="tabNav">
+    <li class="nav-item"><button class="nav-link active" data-tab="history"><i class="bi bi-clock-history"></i> History</button></li>
+    <li class="nav-item"><button class="nav-link" data-tab="sms"><i class="bi bi-chat-dots"></i> SMS</button></li>
+    <li class="nav-item"><button class="nav-link" data-tab="calls"><i class="bi bi-telephone"></i> Calls</button></li>
+  </ul>
+
+  <div id="tabPanes"></div>
+
+  <p class="privacy-note">
+    <i class="bi bi-lock"></i> Files are read from this folder and parsed in your browser only — nothing is uploaded anywhere.
+  </p>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+const TABS = [
+  { key: "history", label: "Browsing History", icon: "bi-clock-history", file: "history", hint: "Place history.csv or history.json next to this page (Chrome: chrome://history → Export history)" },
+  { key: "sms", label: "SMS Messages", icon: "bi-chat-dots", file: "sms", hint: "Place sms.csv or sms.json next to this page (export from an SMS backup app)" },
+  { key: "calls", label: "Call Log", icon: "bi-telephone", file: "calls", hint: "Place calls.csv or calls.json next to this page (export from a call log app)" }
+];
+
+const state = {};
+
+if (window.location.protocol === "file:") {
+  document.getElementById("protocolWarning").classList.remove("d-none");
+}
+
+async function fetchTabData(tab) {
+  for (const ext of ["csv", "json"]) {
+    try {
+      const res = await fetch(`${tab.file}.${ext}?t=${Date.now()}`, { cache: "no-store" });
+      if (!res.ok) continue;
+      const text = await res.text();
+      return { ...(ext === "csv" ? parseCsv(text) : parseJson(text)), error: null, loadedAt: new Date() };
+    } catch (e) { /* try next extension */ }
+  }
+  return { columns: [], rows: [], error: `No ${tab.file}.csv or ${tab.file}.json found in this folder`, loadedAt: null };
+}
+
+function parseCsv(text) {
+  const result = Papa.parse(text, { header: true, skipEmptyLines: true, dynamicTyping: false });
+  if (result.errors && result.errors.length) {
+    console.warn("CSV parse warnings:", result.errors);
+  }
+  return { columns: result.meta.fields || [], rows: result.data };
+}
+
+function parseJson(text) {
+  const data = JSON.parse(text);
+  const arr = Array.isArray(data) ? data : (data.items || data.messages || data.calls || []);
+  if (!Array.isArray(arr) || !arr.length) return { columns: [], rows: [] };
+  const columns = Array.from(arr.reduce((set, obj) => {
+    Object.keys(obj).forEach(k => set.add(k));
+    return set;
+  }, new Set()));
+  const rows = arr.map(obj => {
+    const out = {};
+    columns.forEach(c => out[c] = obj[c] !== undefined ? obj[c] : "");
+    return out;
+  });
+  return { columns, rows };
+}
+
+function formatCell(col, value) {
+  if (value === null || value === undefined || value === "") return "";
+  const looksTemporal = /date|time/i.test(col);
+  if (looksTemporal && /^\d{10,13}$/.test(String(value))) {
+    const ms = String(value).length === 10 ? Number(value) * 1000 : Number(value);
+    const d = new Date(ms);
+    if (!isNaN(d.getTime())) return d.toLocaleString();
+  }
+  return String(value);
+}
+
+function renderPane(tab) {
+  const data = state[tab.key] || { columns: [], rows: [] };
+  const filtered = data.filterText
+    ? data.rows.filter(r => data.columns.some(c => String(r[c]).toLowerCase().includes(data.filterText)))
+    : data.rows;
+
+  const tableHtml = data.rows.length ? `
+    <div class="table-wrap">
+      <table class="table table-striped table-hover">
+        <thead><tr>${data.columns.map(c => `<th>${escapeHtml(c)}</th>`).join("")}</tr></thead>
+        <tbody>
+          ${filtered.map(r => `<tr>${data.columns.map(c => `<td>${escapeHtml(formatCell(c, r[c]))}</td>`).join("")}</tr>`).join("")}
+        </tbody>
+      </table>
+    </div>
+  ` : `
+    <div class="empty-state">
+      <i class="bi ${tab.icon}"></i>
+      No data loaded yet.<br>
+      <small>${tab.hint}</small>
+    </div>
+  `;
+
+  const statusHtml = data.error
+    ? `<span class="text-danger small"><i class="bi bi-exclamation-circle"></i> ${escapeHtml(data.error)}</span>`
+    : data.loadedAt
+      ? `<span class="text-muted small"><i class="bi bi-check-circle"></i> loaded ${data.loadedAt.toLocaleTimeString()}</span>`
+      : `<span class="text-muted small">loading...</span>`;
+
+  return `
+    <div class="panel-card">
+      <div class="toolbar">
+        ${statusHtml}
+        <input type="search" class="form-control form-control-sm search-input" placeholder="Search ${escapeHtml(tab.label.toLowerCase())}..." data-role="search" data-tab="${tab.key}" value="${escapeHtml(data.filterText || "")}" ${data.rows.length ? "" : "disabled"}>
+        <span class="badge bg-secondary count-badge">${filtered.length} / ${data.rows.length} rows</span>
+        <button class="btn btn-outline-secondary btn-sm" data-role="refresh" data-tab="${tab.key}" title="Reload from ${tab.file}.csv/.json">
+          <i class="bi bi-arrow-clockwise"></i>
+        </button>
+      </div>
+      ${tableHtml}
+    </div>
+  `;
+}
+
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+}
+
+let activeTab = "history";
+
+function render() {
+  const tab = TABS.find(t => t.key === activeTab);
+  document.getElementById("tabPanes").innerHTML = renderPane(tab);
+  bindPaneEvents();
+}
+
+function bindPaneEvents() {
+  const pane = document.getElementById("tabPanes");
+  const searchInput = pane.querySelector('[data-role="search"]');
+  const refreshBtn = pane.querySelector('[data-role="refresh"]');
+
+  searchInput.addEventListener("input", (e) => {
+    const tabKey = e.target.dataset.tab;
+    state[tabKey].filterText = e.target.value.toLowerCase();
+    render();
+    pane.querySelector('[data-role="search"]').focus();
+  });
+
+  refreshBtn.addEventListener("click", async (e) => {
+    const tabKey = e.target.closest("[data-tab]").dataset.tab;
+    await loadTab(tabKey);
+  });
+}
+
+document.getElementById("tabNav").addEventListener("click", (e) => {
+  const btn = e.target.closest(".nav-link");
+  if (!btn) return;
+  activeTab = btn.dataset.tab;
+  document.querySelectorAll("#tabNav .nav-link").forEach(el => el.classList.toggle("active", el === btn));
+  render();
+});
+
+async function loadTab(tabKey) {
+  const tab = TABS.find(t => t.key === tabKey);
+  state[tabKey] = { ...(state[tabKey] || {}), filterText: state[tabKey]?.filterText || "" };
+  const result = await fetchTabData(tab);
+  state[tabKey] = { ...result, filterText: state[tabKey].filterText };
+  if (tabKey === activeTab) render();
+}
+
+TABS.forEach(t => { state[t.key] = { columns: [], rows: [], filterText: "", error: null, loadedAt: null }; });
+render();
+TABS.forEach(t => loadTab(t.key));
+</script>
+
+</body>
+</html>
